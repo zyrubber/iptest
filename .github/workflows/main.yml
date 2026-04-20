@@ -75,35 +75,46 @@ jobs:
     name: Release
     needs: build
     runs-on: ubuntu-latest
-    steps:
+steps:
       - name: Checkout code
-        uses: actions/download-artifact@v4
+        uses: actions/checkout@v5 
         with:
-          path: artifacts
+          fetch-depth: 0
 
-      - name: Move Release Assets
+      - name: Setup Go
+        uses: actions/setup-go@v6 
+        with:
+          go-version: "1.20.14" 
+          cache: false
+
+      - name: Create Release Assets Directory
+        run: mkdir -p "${{ github.workspace }}/release_assets"
+
+      - name: Set Build Time
+        id: set-build-time
         run: |
-          mkdir -p release_assets
-          find artifacts -type f ! -name "*.txt" -exec mv {} release_assets/ \;
-          echo "Files to release:"
-          ls -lh release_assets/
+          build_time=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          echo "BUILD_TIME=$build_time" >> $GITHUB_OUTPUT
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
-          name: "Release ${{ github.event.inputs.release_tag || github.ref_name }}"
-          body: |
-            ## Windows 7 (64-bit) 构建版本
-            **构建时间:** ${{ needs.build.outputs.build_time }}
+# 【修改步骤】：使用 sed 强制修改文本，绕过 go 命令的解析限制
+      - name: Fix go.mod version for Go 1.20
+        run: |
+          if [ -f go.mod ]; then
+            echo "Found go.mod, manually patching for Go 1.20 compatibility..."
+            # 强制把 `go 1.xx` 修改为 `go 1.20`
+            sed -i 's/^go .*/go 1.20/' go.mod
+            # 强制删除 Go 1.21+ 生成的 toolchain 声明行（旧版 Go 不认识这一行）
+            sed -i '/^toolchain /d' go.mod
+            echo "Modified go.mod contents:"
+            cat go.mod
+            go mod tidy
+          fi
 
-            完整变更日志:  
-            https://github.com/Kwisma/iptest/commits/${{ github.event.inputs.release_tag || github.ref_name }}
-          files: |
-            ${{ github.workspace }}/release_assets/*
-          draft: false
-          prerelease: ${{ contains(github.event.inputs.release_tag, '-rc') || contains(github.ref_name, '-rc') }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+      - name: Build
+        run: |
+          echo "Building iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }} from iptest.go..."
+          go build -o ${{ github.workspace }}/release_assets/iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }} iptest.go
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+         GOARCH: ${{ matrix.goarch }}
+         GOOS: ${{ matrix.goos }} 
+         CGO_ENABLED: 0 # 显式禁用 CGO，避免跨平台编译踩坑
