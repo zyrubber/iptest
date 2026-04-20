@@ -25,17 +25,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
           go-version: "1.20.14"
-          cache: false
 
       - name: Create Release Assets Directory
-        run: mkdir -p "${{ github.workspace }}/release_assets"
+        run: mkdir -p release_assets
 
       - name: Set Build Time
         id: set-build-time
@@ -45,21 +42,19 @@ jobs:
 
       - name: Build Windows amd64 (Win7 compatible)
         run: |
-          echo "Building iptest-windows-amd64.exe ..."
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-          go build -ldflags "-s -w" \
-          -o ${{ github.workspace }}/release_assets/iptest-windows-amd64.exe iptest.go
+          go build -v -ldflags "-s -w" -o release_assets/iptest-windows-amd64.exe iptest.go
 
       - name: Generate SHA256
         run: |
-          cd "${{ github.workspace }}/release_assets"
+          cd release_assets
           sha256sum iptest-windows-amd64.exe | awk '{print $1}' > iptest-windows-amd64.exe.sha256
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: iptest-windows-amd64
-          path: ${{ github.workspace }}/release_assets/*
+          path: release_assets/*
 
   release:
     name: Release
@@ -74,22 +69,18 @@ jobs:
 
       - name: Move Release Assets
         run: |
-          mkdir -p release_assets
+          mkdir release_assets
           find artifacts -type f -exec mv {} release_assets/ \;
-          ls -lh release_assets/
+          ls -lh release_assets
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
-          name: "Release ${{ github.event.inputs.release_tag || github.ref_name }}"
+          name: Release ${{ github.event.inputs.release_tag || github.ref_name }}
           body: |
-            ## Windows 7 兼容版本
-            **构建时间:** ${{ needs.build.outputs.build_time }}
-          files: |
-            ${{ github.workspace }}/release_assets/*
-          draft: false
-          prerelease: ${{ contains(github.event.inputs.release_tag, '-rc') || contains(github.ref_name, '-rc') }}
-          generate_release_notes: true
+            ## Windows 7 compatible build
+            Build time: ${{ needs.build.outputs.build_time }}
+          files: release_assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
