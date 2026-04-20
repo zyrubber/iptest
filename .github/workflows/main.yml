@@ -1,61 +1,108 @@
-name: build-win7
-
+name: Build for Windows 7 (64-bit)
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (格式 v1.0.0)"
+        required: true
+        default: "v1.0.0"
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-
 permissions:
   contents: write
-
-env:
-  GO_VERSION: "1.20.14"
-  APP_NAME: iptest
-
+  actions: read
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 仅保留适用于 64 位 Windows 的构建配置
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+    outputs:
+      build_time: ${{ steps.set-build-time.outputs.BUILD_TIME }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          # 【重要修改】：Go 1.20.14 是最后一个支持 Windows 7 运行环境的版本
+          go-version: "1.20.14" 
+          cache: false
 
-      - name: Get version
-        id: version
+      - name: Create Release Assets Directory
+        run: mkdir -p "${{ github.workspace }}/release_assets"
+
+      - name: Set Build Time
+        id: set-build-time
         run: |
-          VERSION=$(git describe --tags --always)
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          build_time=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          echo "BUILD_TIME=$build_time" >> $GITHUB_OUTPUT
 
-      - name: Build (Win7 compatible)
+      - name: Build
         run: |
-          mkdir -p dist
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-          go build \
-          -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
-          -o dist/${{ env.APP_NAME }}-windows-amd64.exe .
+          echo "Building iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }} from iptest.go..."
+          go build -o ${{ github.workspace }}/release_assets/iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }} iptest.go
+        env:
+         GOARCH: ${{ matrix.goarch }}
+         GOOS: ${{ matrix.goos }} 
 
-      - name: Generate checksum
+      - name: Generate SHA256
         run: |
-          cd dist
-          sha256sum *.exe > sha256.txt
+          cd "${{ github.workspace }}/release_assets"
+          for file in $(find . -type f ! -name '*.sha256'); do
+            sha256sum "$file" | awk '{print $1}' > "${file}.sha256"
+          done
+          echo "SHA256 files generated:"
+          ls -1 *.sha256
 
-      - name: Upload artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build
-          path: dist/*
+          name: iptest-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }}
+          path: ${{ github.workspace }}/release_assets/*
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Move Release Assets
+        run: |
+          mkdir -p release_assets
+          find artifacts -type f ! -name "*.txt" -exec mv {} release_assets/ \;
+          echo "Files to release:"
+          ls -lh release_assets/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          name: "Release ${{ github.event.inputs.release_tag || github.ref_name }}"
+          body: |
+            ## Windows 7 (64-bit) 构建版本
+            **构建时间:** ${{ needs.build.outputs.build_time }}
+
+            完整变更日志:  
+            https://github.com/Kwisma/iptest/commits/${{ github.event.inputs.release_tag || github.ref_name }}
+          files: |
+            ${{ github.workspace }}/release_assets/*
+          draft: false
+          prerelease: ${{ contains(github.event.inputs.release_tag, '-rc') || contains(github.ref_name, '-rc') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
