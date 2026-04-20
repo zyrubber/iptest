@@ -1,36 +1,18 @@
-name: Build Windows amd64
+name: build-win7
 
-on:
-  push:
-    tags:
-      - "v*"
-
-permissions:
-  contents: write
+on: [push]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.20.14"
 
-      - name: Build
-        env:
-          GOOS: windows
-          GOARCH: amd64
-          CGO_ENABLED: 0
-        run: |
-          go build -ldflags "-s -w" -o iptest-windows-amd64.exe iptest.go
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: iptest-windows-amd64
-          path: iptest-windows-amd64.exe
+      - run: |
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+          go build -ldflags "-s -w" -o app-win7-amd64.exe
