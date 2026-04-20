@@ -1,18 +1,95 @@
-name: build-win7
+name: Build Win7
 
-on: [push]
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (格式 v1.0.0)"
+        required: true
+        default: "v1.0.0"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  actions: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v5
+    outputs:
+      build_time: ${{ steps.set-build-time.outputs.BUILD_TIME }}
 
-      - uses: actions/setup-go@v6
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
         with:
           go-version: "1.20.14"
+          cache: false
 
-      - run: |
+      - name: Create Release Assets Directory
+        run: mkdir -p "${{ github.workspace }}/release_assets"
+
+      - name: Set Build Time
+        id: set-build-time
+        run: |
+          build_time=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          echo "BUILD_TIME=$build_time" >> $GITHUB_OUTPUT
+
+      - name: Build Windows amd64 (Win7 compatible)
+        run: |
+          echo "Building iptest-windows-amd64.exe ..."
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-          go build -ldflags "-s -w" -o app-win7-amd64.exe
+          go build -ldflags "-s -w" \
+          -o ${{ github.workspace }}/release_assets/iptest-windows-amd64.exe iptest.go
+
+      - name: Generate SHA256
+        run: |
+          cd "${{ github.workspace }}/release_assets"
+          sha256sum iptest-windows-amd64.exe | awk '{print $1}' > iptest-windows-amd64.exe.sha256
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptest-windows-amd64
+          path: ${{ github.workspace }}/release_assets/*
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Move Release Assets
+        run: |
+          mkdir -p release_assets
+          find artifacts -type f -exec mv {} release_assets/ \;
+          ls -lh release_assets/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          name: "Release ${{ github.event.inputs.release_tag || github.ref_name }}"
+          body: |
+            ## Windows 7 兼容版本
+            **构建时间:** ${{ needs.build.outputs.build_time }}
+          files: |
+            ${{ github.workspace }}/release_assets/*
+          draft: false
+          prerelease: ${{ contains(github.event.inputs.release_tag, '-rc') || contains(github.ref_name, '-rc') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
